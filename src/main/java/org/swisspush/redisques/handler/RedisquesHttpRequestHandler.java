@@ -45,6 +45,7 @@ public class RedisquesHttpRequestHandler implements Handler<HttpServerRequest> {
     private static final String COUNT_PARAM = "count";
     private static final String BULK_DELETE_PARAM = "bulkDelete";
     private static final String EMPTY_QUEUES_PARAM = "emptyQueues";
+    private static final String ONLY_NON_EMPTY = "onlyNonEmpty";
     private static final String DELETED = "deleted";
 
     private final String redisquesAddress;
@@ -486,9 +487,19 @@ public class RedisquesHttpRequestHandler implements Handler<HttpServerRequest> {
 
     private void listQueues(RoutingContext ctx) {
         String filter = ctx.request().params().get(FILTER);
+        boolean onlyNonEmpty = evaluateUrlParameterToBeEmptyOrTrue(ONLY_NON_EMPTY, ctx.request());
+        final JsonObject resultObject = new JsonObject();
+        final JsonArray queuesArray = new JsonArray();
         eventBus.send(redisquesAddress, buildGetQueuesOperation(filter), (Handler<AsyncResult<Message<JsonObject>>>) reply -> {
             if (reply.succeeded() && OK.equals(reply.result().body().getString(STATUS))) {
-                jsonResponse(ctx.response(), reply.result().body().getJsonObject(VALUE));
+                final List<String> queueNames = reply.result().body().getJsonObject(VALUE).getJsonArray("queues").getList();
+                collectQueueLengths(queueNames, extractLimit(ctx), !onlyNonEmpty, mapEntries -> {
+                    for (Map.Entry<String, Long> entry : mapEntries) {
+                        queuesArray.add(entry.getKey());
+                    }
+                    resultObject.put("queues", queuesArray);
+                    jsonResponse(ctx.response(), resultObject);
+                });
             } else {
                 String error = "Unable to list active queues. Cause: " + reply.result().body().getString(MESSAGE);
                 String errorType = reply.result().body().getString(ERROR_TYPE);
